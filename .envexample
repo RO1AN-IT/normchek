@@ -1,0 +1,20 @@
+# Путь к Tesseract OCR
+# Можно использовать переменную PATH_OCR или TESSERACT_PATH
+# Примеры для разных ОС:
+
+# Windows:
+# PATH_OCR=C:\Program Files\Tesseract-OCR\tesseract.exe
+# или
+# PATH_OCR=C:\Program Files\Tesseract-OCR
+
+# macOS (Homebrew):
+# PATH_OCR=/opt/homebrew/bin/tesseract
+# или
+# PATH_OCR=/usr/local/bin/tesseract
+
+# Linux:
+# PATH_OCR=/usr/bin/tesseract
+# или
+# PATH_OCR=/usr/local/bin/tesseract
+
+# Если Tesseract в PATH, можно оставить пустым:

@@ -2,9 +2,11 @@ import os
 import tempfile
 import io
 import warnings
-from typing import List
+import logging
+from typing import List, Optional
 import numpy as np
 import pytesseract
+from pytesseract import TesseractError
 from PIL import Image, ImageEnhance, ImageFilter
 from .page_model import TextBlock
 
@@ -14,45 +16,46 @@ warnings.filterwarnings('ignore', category=UserWarning)
 
 class OCRFallback:
 
-    def __init__(self, tesseract_path: str = None):
+    def __init__(self, tesseract_path: Optional[str] = None):
         # Используем Tesseract OCR - лучше работает с русским языком
-        # Указываем путь к Tesseract, если он не в PATH
+        # Сначала проверяем переменную окружения, затем переданный параметр
+        env_path = os.getenv('TESSERACT_PATH') or os.getenv('PATH_OCR')
+        
+        # Приоритет: переданный параметр > переменная окружения
+        tesseract_path = tesseract_path or env_path
+
         if tesseract_path:
-            # Если передан путь к папке, добавляем tesseract.exe
+            # Определяем имя исполняемого файла в зависимости от ОС
+            if os.name == 'nt':  # Windows
+                exe_name = 'tesseract.exe'
+            else:  # macOS, Linux
+                exe_name = 'tesseract'
+            
+            # Если передан путь к папке, добавляем имя исполняемого файла
             if os.path.isdir(tesseract_path):
-                tesseract_exe = os.path.join(tesseract_path, 'tesseract.exe')
+                tesseract_exe = os.path.join(tesseract_path, exe_name)
                 if os.path.exists(tesseract_exe):
                     pytesseract.pytesseract.tesseract_cmd = tesseract_exe
                 else:
                     # Пробуем найти в подпапках
                     for subdir in ['bin', '']:
-                        test_path = os.path.join(tesseract_path, subdir, 'tesseract.exe')
+                        test_path = os.path.join(tesseract_path, subdir, exe_name)
                         if os.path.exists(test_path):
                             pytesseract.pytesseract.tesseract_cmd = test_path
                             break
             elif os.path.isfile(tesseract_path):
                 pytesseract.pytesseract.tesseract_cmd = tesseract_path
-        else:
-            # Пробуем стандартные пути установки
-            default_paths = [
-                r'D:\Go-prog\prog2\tesseract\tesseract.exe',
-                r'D:\Go-prog\prog2\tesseract\bin\tesseract.exe',
-                r'C:\Program Files\Tesseract-OCR\tesseract.exe',
-                r'C:\Program Files (x86)\Tesseract-OCR\tesseract.exe',
-            ]
-            for path in default_paths:
-                if os.path.exists(path):
-                    pytesseract.pytesseract.tesseract_cmd = path
-                    break
-        
+    
         # Проверяем наличие Tesseract
         try:
             pytesseract.get_tesseract_version()
         except Exception as e:
+            exe_name = 'tesseract.exe' if os.name == 'nt' else 'tesseract'
             raise RuntimeError(
-                "Tesseract OCR не найден. Укажите путь к tesseract.exe:\n"
-                "OCRFallback(tesseract_path='D:\\Go-prog\\prog2\\tesseract\\tesseract.exe')\n"
-                "Или добавьте Tesseract в PATH"
+                f"Tesseract OCR не найден. Укажите путь к {exe_name}:\n"
+                "1. Через переменную окружения: TESSERACT_PATH или PATH_OCR в .env файле\n"
+                "2. Через параметр: OCRFallback(tesseract_path='/path/to/tesseract')\n"
+                "3. Или добавьте Tesseract в PATH"
             ) from e
 
     def _preprocess_image(self, img: Image.Image) -> Image.Image:
@@ -108,12 +111,60 @@ class OCRFallback:
         custom_config = r'--oem 3 --psm 6 -l rus+eng'
         
         # Получаем данные с координатами и уверенностью
-        data = pytesseract.image_to_data(
-            processed_img,
-            config=custom_config,
-            output_type=pytesseract.Output.DICT,
-            lang='rus+eng'
-        )
+        try:
+            data = pytesseract.image_to_data(
+                processed_img,
+                config=custom_config,
+                output_type=pytesseract.Output.DICT,
+                lang='rus+eng'
+            )
+        except UnicodeDecodeError as e:
+            # Обрабатываем ошибку декодирования, которая возникает внутри pytesseract
+            # при попытке декодировать бинарные данные из stderr Tesseract
+            logger = logging.getLogger(__name__)
+            logger.warning(f"Ошибка декодирования при обработке ошибки Tesseract: {e}. Пробуем альтернативный метод...")
+            # Пробуем альтернативный подход через временный файл
+            try:
+                with tempfile.NamedTemporaryFile(suffix='.png', delete=False) as tmp_file:
+                    processed_img.save(tmp_file.name, 'PNG')
+                    tmp_path = tmp_file.name
+                
+                try:
+                    data = pytesseract.image_to_data(
+                        tmp_path,
+                        config=custom_config,
+                        output_type=pytesseract.Output.DICT,
+                        lang='rus+eng'
+                    )
+                finally:
+                    if os.path.exists(tmp_path):
+                        os.unlink(tmp_path)
+            except Exception as inner_e:
+                logger.warning(f"Альтернативный метод также не сработал: {inner_e}. Возвращаем пустой список.")
+                return []
+        except TesseractError as e:
+            # Обрабатываем ошибки Tesseract
+            logger = logging.getLogger(__name__)
+            logger.warning(f"Ошибка Tesseract OCR: {e}. Пробуем альтернативный метод...")
+            # Пробуем альтернативный подход через временный файл
+            try:
+                with tempfile.NamedTemporaryFile(suffix='.png', delete=False) as tmp_file:
+                    processed_img.save(tmp_file.name, 'PNG')
+                    tmp_path = tmp_file.name
+                
+                try:
+                    data = pytesseract.image_to_data(
+                        tmp_path,
+                        config=custom_config,
+                        output_type=pytesseract.Output.DICT,
+                        lang='rus+eng'
+                    )
+                finally:
+                    if os.path.exists(tmp_path):
+                        os.unlink(tmp_path)
+            except Exception as inner_e:
+                logger.warning(f"Альтернативный метод также не сработал: {inner_e}. Возвращаем пустой список.")
+                return []
 
         blocks = []
         n_boxes = len(data['text'])

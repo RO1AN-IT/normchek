@@ -5,7 +5,24 @@ from parser.table_extractor import TableExtractor
 from parser.stamp_detector import StampDetector
 from parser.ocr_fallback import OCRFallback
 from parser.page_model import PageModel
+import logging
+import os
+from dotenv import load_dotenv
 
+dotenv_path = os.path.join(os.path.dirname(__file__), '.env')
+if os.path.exists(dotenv_path):
+    load_dotenv(dotenv_path)
+else:
+    logger.error("Файл .env не найден")
+    raise FileNotFoundError("Файл .env не найден")
+
+PATH_OCR = os.getenv("PATH_OCR")
+
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
 
 def is_scanned(page):
     return len(page.get_text().strip()) < 10
@@ -39,10 +56,14 @@ pdf = PdfLoader("album.pdf")
 print("Инициализация экстракторов...")
 text_ext = TextExtractor()
 geom_ext = GeometryExtractor()
-print("Инициализация OCR (это может занять время)...")
+logger.info("Инициализация OCR (это может занять время)...")
 # Указываем путь к Tesseract, если он не в PATH
-ocr_ext = OCRFallback(tesseract_path=r'D:\Go-prog\prog2\tesseract')
-print("OCR инициализирован")
+try:
+    ocr_ext = OCRFallback(tesseract_path=PATH_OCR)
+except Exception as e:
+    logger.error(f"{e}")
+    raise
+logger.info("OCR инициализирован")
 stamp_det = StampDetector()
 table_ext = TableExtractor("album.pdf")
 
@@ -52,7 +73,7 @@ total_pages = len(pdf)
 print(f"Начинаем обработку {total_pages} страниц...")
 
 for i, page in enumerate(pdf.pages()):
-    if i >1:
+    if i > 1:
         break
     print(f"Обработка страницы {i + 1}/{total_pages}...")
     scanned = is_scanned(page)
